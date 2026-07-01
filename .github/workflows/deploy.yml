@@ -49,5 +49,5 @@ jobs:
       - name: Desplegar Frontend en ECS
         run: aws ecs update-service --cluster $ECS_CLUSTER --service frontend-svc --force-new-deployment
 
-      - name: Esperar Estabilidad del Clúster
-        run: aws ecs wait services-stable --cluster $ECS_CLUSTER --services backend-svc frontend-svc
+      - name: Desplegar Frontend en ECS
+        run: aws ecs update-service --cluster $ECS_CLUSTER --service frontend-svc --force-new-deployment
