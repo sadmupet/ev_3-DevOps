@@ -1,0 +1,22 @@
+{
+  "family": "greenbite-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::790226695663:role/LabRole",
+  "taskRoleArn": "arn:aws:iam::790226695663:role/LabRole",
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "790226695663.dkr.ecr.us-east-1.amazonaws.com/greenbite-backend:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "hostPort": 3000
+        }
+      ]
+    }
+  ]
+}
