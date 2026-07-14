@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 const {
-  DB_HOST = tienda-db, // acá resuelve internamente en eks
+  DB_HOST = "tienda-db", // acá resuelve internamente en eks
   DB_USER = "root",
   DB_PASSWORD = "admin123",
   DB_NAME = "tienda_perritos",
@@ -18,22 +18,32 @@ app.use(express.json());
 
 let pool;
 
-// Inicializar pool de conexiones
-async function initDb() {
-  try {
-    pool = mysql.createPool({
-      host: DB_HOST,
-      user: DB_USER,
-      password: DB_PASSWORD,
-      database: DB_NAME,
-      port: DB_PORT,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-    });
-    console.log("Pool de conexiones MySQL inicializado.");
-  } catch (err) {
-    console.error("Error al inicializar pool de MySQL:", err);
+// Inicializar pool de conexiones (con reintentos, ya que MySQL puede tardar en levantar)
+async function initDb(retries = 10, delayMs = 3000) {
+  for (let intento = 1; intento <= retries; intento++) {
+    try {
+      pool = mysql.createPool({
+        host: DB_HOST,
+        user: DB_USER,
+        password: DB_PASSWORD,
+        database: DB_NAME,
+        port: DB_PORT,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+      // Probar la conexión antes de dar por inicializado el pool
+      await pool.query("SELECT 1");
+      console.log("Pool de conexiones MySQL inicializado.");
+      return;
+    } catch (err) {
+      console.error(`Intento ${intento}/${retries} de conexión a MySQL falló: ${err.message}`);
+      if (intento === retries) {
+        console.error("No fue posible conectar a MySQL. El backend seguirá levantado, pero las consultas fallarán.");
+        return;
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
   }
 }
 

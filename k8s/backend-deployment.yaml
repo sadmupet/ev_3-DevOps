@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: {{ECR_URL}}/tienda-backend:eks-v1
+          image: "{{ECR_URL}}/tienda-backend:eks-v1"
           ports:
             - containerPort: 3001
           env:

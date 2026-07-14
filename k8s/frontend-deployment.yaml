@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: {{ECR_URL}}/tienda-frontend:eks-v1
+          image: "{{ECR_URL}}/tienda-frontend:eks-v1"
           ports:
             - containerPort: 80
 

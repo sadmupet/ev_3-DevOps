@@ -1,4 +1,4 @@
-name: CI/CD Innovatech
+name: CI/CD Tienda de Perritos - EKS
 
 on:
   push:
@@ -6,18 +6,21 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPO_BACKEND: greenbite-backend
-  ECR_REPO_FRONTEND: greenbite-frontend
-  ECS_CLUSTER: Innovatech-Cluster
+  EKS_CLUSTER: devopseks
+  K8S_NAMESPACE: tienda
+  ECR_REPO_BACKEND: tienda-backend
+  ECR_REPO_FRONTEND: tienda-frontend
+  ECR_REPO_DB: tienda-db
 
 jobs:
-  deploy:
+  build-test-push:
+    name: Build, Test & Push
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Código
+      - name: Checkout código
         uses: actions/checkout@v4
 
-      - name: Configurar Credenciales de AWS
+      - name: Configurar credenciales de AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -25,29 +28,103 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Requerido para AWS Academy
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login en AWS ECR
+      - name: Login en Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Instalar dependencias del backend
+        working-directory: ./backend
+        run: npm install --production
+
+      - name: Test backend (chequeo de sintaxis)
+        working-directory: ./backend
+        run: npm test
+
       - name: Build & Push Backend
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker build -t ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO_BACKEND:${{ github.sha }} ./backend
-          docker build -t ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO_BACKEND:latest ./backend
-          docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO_BACKEND:${{ github.sha }}
-          docker push ${{ secrets.AWS_ACCESS_KEY_ID == '' && steps.login-ecr.outputs.registry || steps.login-ecr.outputs.registry }}/$ECR_REPO_BACKEND:latest
+          docker build -t $REGISTRY/$ECR_REPO_BACKEND:${{ github.sha }} -t $REGISTRY/$ECR_REPO_BACKEND:eks-v1 ./backend
+          docker push $REGISTRY/$ECR_REPO_BACKEND:${{ github.sha }}
+          docker push $REGISTRY/$ECR_REPO_BACKEND:eks-v1
 
       - name: Build & Push Frontend
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker build -t ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO_FRONTEND:${{ github.sha }} ./frontend
-          docker build -t ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO_FRONTEND:latest ./frontend
-          docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO_FRONTEND:${{ github.sha }}
-          docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO_FRONTEND:latest
+          docker build -t $REGISTRY/$ECR_REPO_FRONTEND:${{ github.sha }} -t $REGISTRY/$ECR_REPO_FRONTEND:eks-v1 ./frontend
+          docker push $REGISTRY/$ECR_REPO_FRONTEND:${{ github.sha }}
+          docker push $REGISTRY/$ECR_REPO_FRONTEND:eks-v1
 
-      - name: Desplegar Backend en ECS
-        run: aws ecs update-service --cluster $ECS_CLUSTER --service backend-svc --force-new-deployment
+      - name: Build & Push DB
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -t $REGISTRY/$ECR_REPO_DB:${{ github.sha }} -t $REGISTRY/$ECR_REPO_DB:eks-v1 ./db
+          docker push $REGISTRY/$ECR_REPO_DB:${{ github.sha }}
+          docker push $REGISTRY/$ECR_REPO_DB:eks-v1
 
-      - name: Desplegar Frontend en ECS
-        run: aws ecs update-service --cluster $ECS_CLUSTER --service frontend-svc --force-new-deployment
+  deploy:
+    name: Deploy a EKS
+    needs: build-test-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
 
-      - name: Desplegar Frontend en ECS
-        run: aws ecs update-service --cluster $ECS_CLUSTER --service frontend-svc --force-new-deployment
+      - name: Configurar credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login en Amazon ECR (para obtener el registry URL)
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Configurar kubectl contra el clúster EKS
+        run: aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER }}
+
+      - name: Aplicar namespace
+        run: kubectl apply -f k8s/namespace.yaml
+
+      - name: Crear/actualizar secreto de MySQL desde GitHub Secrets
+        run: |
+          kubectl create secret generic mysql-secret \
+            --namespace ${{ env.K8S_NAMESPACE }} \
+            --from-literal=MYSQL_ROOT_PASSWORD='${{ secrets.DB_ROOT_PASSWORD }}' \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Reemplazar {{ECR_URL}} en los manifiestos
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          find ./k8s -type f -name "*.yaml" -exec sed -i "s|{{ECR_URL}}|$REGISTRY|g" {} \;
+          find ./k8s -type f -name "*.yaml" -exec sed -i "s|:eks-v1|:${{ github.sha }}|g" {} \;
+
+      - name: Desplegar MySQL
+        run: |
+          kubectl apply -f k8s/mysql-deployment.yaml
+          kubectl apply -f k8s/mysql-service.yaml
+          kubectl rollout status deployment/tienda-db -n ${{ env.K8S_NAMESPACE }} --timeout=300s
+
+      - name: Desplegar Backend
+        run: |
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/backend-service.yaml
+          kubectl apply -f k8s/backend-hpa.yaml
+          kubectl rollout status deployment/tienda-backend -n ${{ env.K8S_NAMESPACE }} --timeout=300s
+
+      - name: Desplegar Frontend
+        run: |
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/frontend-service.yaml
+          kubectl apply -f k8s/frontend-hpa.yaml
+          kubectl rollout status deployment/tienda-frontend -n ${{ env.K8S_NAMESPACE }} --timeout=300s
+
+      - name: Mostrar estado y endpoint público
+        run: |
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+          kubectl get svc tienda-frontend -n ${{ env.K8S_NAMESPACE }}

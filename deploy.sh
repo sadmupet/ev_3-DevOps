@@ -31,6 +31,14 @@ echo "Instalando Metrics Server..."
 kubectl apply -f \
 https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 
+echo ""
+echo "Habilitando CloudWatch Container Insights (logs y métricas)..."
+
+ACCOUNT_ID_INSIGHTS=${ACCOUNT_ID}
+curl -s https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/quickstart/cwagent-fluent-bit-quickstart.yaml | \
+  sed "s/{{cluster_name}}/${CLUSTER_NAME}/;s/{{region_name}}/${REGION}/" | \
+  kubectl apply -f - || echo "AVISO: no se pudo aplicar Container Insights automáticamente (revisar permisos IAM del rol de laboratorio). Se puede activar manualmente desde la consola de EKS > Observability."
+
 
 echo "Configurando manifests Kubernetes..."
 find ./k8s -type f -name "*.yaml" \
