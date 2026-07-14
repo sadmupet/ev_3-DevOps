@@ -39,12 +39,39 @@ async function initDb(retries = 10, delayMs = 3000) {
     } catch (err) {
       console.error(`Intento ${intento}/${retries} de conexión a MySQL falló: ${err.message}`);
       if (intento === retries) {
-        console.error("No fue posible conectar a MySQL. El backend seguirá levantado, pero las consultas fallarán.");
+        console.error("No fue posible conectar a MySQL en el arranque. Reintentando en segundo plano cada 10s...");
+        keepRetryingInBackground();
         return;
       }
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
+}
+
+// Reintento en segundo plano: no bloquea el arranque del servidor ni los health checks,
+// pero sigue intentando reconectar hasta que la BD esté disponible (útil si MySQL tarda
+// más de lo esperado en levantar, ej. tras un CrashLoopBackOff temporal).
+function keepRetryingInBackground() {
+  const interval = setInterval(async () => {
+    try {
+      const testPool = mysql.createPool({
+        host: DB_HOST,
+        user: DB_USER,
+        password: DB_PASSWORD,
+        database: DB_NAME,
+        port: DB_PORT,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+      await testPool.query("SELECT 1");
+      pool = testPool;
+      console.log("Reconexión a MySQL exitosa (reintento en segundo plano).");
+      clearInterval(interval);
+    } catch (err) {
+      console.error(`Reintento en segundo plano falló: ${err.message}`);
+    }
+  }, 10000);
 }
 
 // Helper para manejar errores
